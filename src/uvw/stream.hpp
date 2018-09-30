@@ -98,8 +98,15 @@ public:
 
     WriteReq(ConstructorAccess ca, std::shared_ptr<Loop> loop, std::unique_ptr<char[], Deleter> dt, unsigned int len)
         : Request<WriteReq, uv_write_t>{ca, std::move(loop)},
-          data{std::move(dt)},
-          buf{uv_buf_init(data.get(), len)}
+          unq_data{std::move(dt)},
+          buf{uv_buf_init(unq_data.get(), len)}
+    {}
+
+    WriteReq(ConstructorAccess ca, std::shared_ptr<Loop> loop, std::shared_ptr<char> dt, unsigned int len)
+        : Request<WriteReq, uv_write_t>{ca, std::move(loop)},
+          unq_data(std::unique_ptr<char[], details::WriteReq::Deleter>{nullptr, [](char*ptr){return;}}),
+          shr_data{std::move(dt)},
+          buf{uv_buf_init(shr_data.get(), len)}
     {}
 
     void write(uv_stream_t *handle) {
@@ -111,7 +118,8 @@ public:
     }
 
 private:
-    std::unique_ptr<char[], Deleter> data;
+    std::unique_ptr<char[], Deleter> unq_data;
+    std::shared_ptr<char> shr_data;
     uv_buf_t buf;
 };
 
@@ -297,6 +305,30 @@ public:
     }
 
     /**
+     * @brief Writes data to the stream.
+     *
+     * Data are written in order. The handle persists lifetime of the
+     * data.
+     *
+     * A WriteEvent event will be emitted when the data have been written.<br/>
+     * An ErrorEvent event will be emitted in case of errors.
+     *
+     * @param data The data to be written to the stream.
+     * @param len The lenght of the submitted data.
+     */
+    void write(std::shared_ptr<char> data, unsigned int len) {
+        auto req = this->loop().template resource<details::WriteReq>(data, len);
+
+        auto listener = [ptr = this->shared_from_this()](const auto &event, const auto &) {
+            ptr->publish(event);
+        };
+
+        req->template once<ErrorEvent>(listener);
+        req->template once<WriteEvent>(listener);
+        req->write(this->template get<uv_stream_t>());
+    }
+
+    /**
      * @brief Extended write function for sending handles over a pipe handle.
      *
      * The pipe must be initialized with `ipc == true`.
@@ -356,6 +388,37 @@ public:
                     std::unique_ptr<char[], details::WriteReq::Deleter>{
                         data, [](char *) {}
                     }, len);
+
+        auto listener = [ptr = this->shared_from_this()](const auto &event, const auto &) {
+            ptr->publish(event);
+        };
+
+        req->template once<ErrorEvent>(listener);
+        req->template once<WriteEvent>(listener);
+        req->write(this->template get<uv_stream_t>(), send.template get<uv_stream_t>());
+    }
+
+    /**
+     * @brief Extended write function for sending handles over a pipe handle.
+     *
+     * The pipe must be initialized with `ipc == true`.
+     *
+     * `send` must be a TcpHandle or PipeHandle handle, which is a server or a
+     * connection (listening or connected state). Bound sockets or pipes will be
+     * assumed to be servers.
+     *
+     * The handle shares the ownership of the data to persist lifetime.
+     *
+     * A WriteEvent event will be emitted when the data have been written.<br/>
+     * An ErrorEvent wvent will be emitted in case of errors.
+     *
+     * @param send The handle over which to write data.
+     * @param data The data to be written to the stream.
+     * @param len The lenght of the submitted data.
+     */
+    template<typename S>
+    void write(S &send, std::shared_ptr<char> data, unsigned int len) {
+        auto req = this->loop().template resource<details::WriteReq>(data, len);
 
         auto listener = [ptr = this->shared_from_this()](const auto &event, const auto &) {
             ptr->publish(event);
