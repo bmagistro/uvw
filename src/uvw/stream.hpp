@@ -102,11 +102,11 @@ public:
           buf{uv_buf_init(unq_data.get(), len)}
     {}
 
-    WriteReq(ConstructorAccess ca, std::shared_ptr<Loop> loop, std::shared_ptr<char> dt, unsigned int len)
+    WriteReq(ConstructorAccess ca, std::shared_ptr<Loop> loop, std::shared_ptr<char> dt, unsigned int len, unsigned int offset)
         : Request<WriteReq, uv_write_t>{ca, std::move(loop)},
           unq_data(std::unique_ptr<char[], details::WriteReq::Deleter>{nullptr, [](char*ptr){return;}}),
           shr_data{std::move(dt)},
-          buf{uv_buf_init(shr_data.get(), len)}
+          buf{uv_buf_init(shr_data.get() + offset, len)}
     {}
 
     void write(uv_stream_t *handle) {
@@ -316,8 +316,8 @@ public:
      * @param data The data to be written to the stream.
      * @param len The lenght of the submitted data.
      */
-    void write(std::shared_ptr<char> data, unsigned int len) {
-        auto req = this->loop().template resource<details::WriteReq>(data, len);
+    void write(std::shared_ptr<char> data, unsigned int len, unsigned int offset=0) {
+        auto req = this->loop().template resource<details::WriteReq>(data, len, offset);
 
         auto listener = [ptr = this->shared_from_this()](const auto &event, const auto &) {
             ptr->publish(event);
